@@ -15,6 +15,10 @@ from utils.disaster_rules import (
     combine_risk_levels,
 )
 
+@st.cache_data(ttl=300)
+def get_weekly_events(_client):
+    return _client.weekly_events()
+
 st.set_page_config(page_title="IoT Emergency Alert System", page_icon="🚨", layout="wide")
 
 st.title(" IoT-Powered Emergency Alert and Disaster Monitoring System")
@@ -53,7 +57,7 @@ if st.button("Fetch Live Monitoring Data", type="primary") or "loaded_once" in s
             min_magnitude=min_mag,
             lookback_hours=lookback,
         )
-        weekly_events = quake_client.weekly_events()
+        weekly_events = get_weekly_events(quake_client)
     except Exception as exc:
         st.error(f"Failed to fetch monitoring data: {exc}")
         st.stop()
