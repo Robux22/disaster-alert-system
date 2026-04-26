@@ -6,7 +6,6 @@ import streamlit.components.v1 as components
 from folium import Map, TileLayer
 from folium.plugins import HeatMap
 
-
 from services.api_clients import EarthquakeClient, WeatherClient
 from utils.disaster_rules import (
     analyze_country_city_risk,
@@ -15,28 +14,51 @@ from utils.disaster_rules import (
     combine_risk_levels,
 )
 
+
 @st.cache_data(ttl=300)
 def get_weekly_events():
     return EarthquakeClient().weekly_events()
+
+
+@st.cache_data(ttl=300)
+def get_location(city: str):
+    return WeatherClient().resolve_city(city)
+
+
+@st.cache_data(ttl=300)
+def get_weather(latitude: float, longitude: float):
+    return WeatherClient().current_weather(latitude, longitude)
+
+
+@st.cache_data(ttl=300)
+def get_quake_events(latitude: float, longitude: float, radius: int, min_mag: float, lookback: int):
+    return EarthquakeClient().nearby_events(
+        latitude=latitude,
+        longitude=longitude,
+        max_radius_km=radius,
+        min_magnitude=min_mag,
+        lookback_hours=lookback,
+    )
+
 
 @st.cache_data
 def create_heatmap(df):
     base_map = Map(location=[20, 0], zoom_start=2, control_scale=True)
     TileLayer("OpenStreetMap").add_to(base_map)
-
     heat_points = df.apply(
         lambda row: [float(row["latitude"]), float(row["longitude"]), float(row["magnitude"])],
         axis=1,
     ).tolist()
-
     HeatMap(heat_points, radius=12, blur=10).add_to(base_map)
     return base_map._repr_html_()
 
-st.set_page_config(page_title="Emergency Alert System", page_icon="🚨", layout="wide")
 
-st.title(" Emergency Alert and Disaster Monitoring System")
+# ── Page config ──────────────────────────────────────────────────────────────
+st.set_page_config(page_title="Emergency Alert System", page_icon="🚨", layout="wide")
+st.title("Emergency Alert and Disaster Monitoring System")
 st.caption("Software-only implementation using third-party weather and earthquake APIs.")
 
+# ── Inputs ───────────────────────────────────────────────────────────────────
 city = st.text_input("Enter city to monitor", value="Gwalior")
 
 with st.sidebar:
@@ -45,59 +67,21 @@ with st.sidebar:
     min_mag = st.slider("Minimum earthquake magnitude", min_value=1.0, max_value=7.0, value=2.5, step=0.1)
     lookback = st.slider("Lookback window (hours)", min_value=6, max_value=168, value=48, step=6)
 
-# Button click    
-if st.button("Fetch Live Monitoring Data", type="primary"):
-    st.session_state["run"] = True
-        
-# Run logic AFTER button and store results in session state to avoid re-fetching on every interaction
-if st.session_state.get("run") and not st.session_state.get("data_loaded"):
-    weather_client = WeatherClient()
-    quake_client = EarthquakeClient()
+# ── Fetch on button click ─────────────────────────────────────────────────────
+clicked = st.button("Fetch Live Monitoring Data", type="primary")
 
-    try:
-        st.write("⏳ Resolving city...")         
-        location = weather_client.resolve_city(city)
+if clicked:
+    with st.spinner("Fetching live data..."):
+        try:
+            location = get_location(city)
+            current_weather = get_weather(location.latitude, location.longitude)
+            quake_events = get_quake_events(location.latitude, location.longitude, radius, min_mag, lookback)
+            weekly_events = get_weekly_events()
+        except Exception as exc:
+            st.error(f"Failed to fetch monitoring data: {exc}")
+            st.stop()
 
-        st.write("⏳ Fetching weather...")                                              
-        current_weather = weather_client.current_weather(location.latitude, location.longitude)
-
-        st.write("⏳ Fetching earthquakes...")     
-        quake_events = quake_client.nearby_events(latitude=location.latitude,
-        longitude=location.longitude,
-        max_radius_km=radius,
-        min_magnitude=min_mag,
-        lookback_hours=lookback,)
-
-        st.write("⏳ Fetching weekly events...")   
-        weekly_events = get_weekly_events(quake_client)
-
-    except Exception as exc:
-        st.error(f"Failed: {exc}")
-        st.stop()
-    
-        weekly_events = get_weekly_events()
-
-    except Exception as exc:
-        st.error(f"Failed to fetch monitoring data: {exc}")
-        st.stop()
-
-    # Store fetched data in session state
-    st.session_state["data"] = {
-        "location": location,
-        "weather": current_weather,
-        "quakes": quake_events,
-        "weekly": weekly_events
-    }
-    st.session_state["data_loaded"] = True
-
-if st.session_state.get("data_loaded"):
-    data = st.session_state["data"]
-
-    location = data["location"]
-    current_weather = data["weather"]
-    quake_events = data["quakes"]
-    weekly_events = data["weekly"]        
-
+    # ── Results ───────────────────────────────────────────────────────────────
     weather_level, weather_reason = classify_weather_risk(current_weather)
     quake_level, quake_reason = classify_earthquake_risk(quake_events)
     overall_level = combine_risk_levels(weather_level, quake_level)
@@ -145,7 +129,6 @@ if st.session_state.get("data_loaded"):
             heatmap_df = heatmap_df.sample(n=min(1000, len(heatmap_df)))
             heatmap_html = create_heatmap(heatmap_df)
             components.html(heatmap_html, height=600)
-        st.info("No weekly earthquake data available right now.")
 
     st.divider()
     st.subheader("📈 Historical Risk Analysis (Last 7 Days)")
@@ -158,9 +141,7 @@ if st.session_state.get("data_loaded"):
         st.markdown("#### Top 5 Risky Countries")
         if top_countries:
             for idx, country_item in enumerate(top_countries, start=1):
-                st.write(
-                    f"{idx}. **{country_item['country']}** — Risk Score: {country_item['risk_score']}"
-                )
+                st.write(f"{idx}. **{country_item['country']}** — Risk Score: {country_item['risk_score']}")
         else:
             st.write("No country-level historical data available.")
 
@@ -173,5 +154,6 @@ if st.session_state.get("data_loaded"):
                     st.write(f"- {city_item['city']} (Risk Score: {city_item['risk_score']})")
         else:
             st.write("No city-level historical data available.")
+
 else:
     st.info("Set your location and click 'Fetch Live Monitoring Data' to start monitoring.")
