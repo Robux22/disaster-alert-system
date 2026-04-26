@@ -26,16 +26,6 @@ st.caption("Software-only implementation using third-party weather and earthquak
 
 city = st.text_input("Enter city to monitor", value="Gwalior")
 
-# Auto-refresh every 60 seconds for live dashboard updates.
-components.html(
-    """
-    <script>
-      setTimeout(function () { window.parent.location.reload(); }, 60000);
-    </script>
-    """,
-    height=0,
-)
-
 with st.sidebar:
     st.header("Detection Settings")
     radius = st.slider("Earthquake radius (km)", min_value=100, max_value=2000, value=500, step=50)
@@ -98,6 +88,8 @@ if st.button("Fetch Live Monitoring Data", type="primary") or "loaded_once" in s
         heatmap_df = heatmap_df[["latitude", "longitude", "magnitude"]].dropna()
         heatmap_df["magnitude"] = pd.to_numeric(heatmap_df["magnitude"], errors="coerce").fillna(0.0)
         heatmap_df = heatmap_df[heatmap_df["magnitude"] > 0]
+        
+        heatmap_df = heatmap_df.sample(n=min(1000, len(heatmap_df)))
 
         if heatmap_df.empty:
             st.info("No valid weekly earthquake coordinates available for heatmap rendering.")
