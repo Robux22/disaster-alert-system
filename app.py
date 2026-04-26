@@ -32,7 +32,7 @@ with st.sidebar:
     min_mag = st.slider("Minimum earthquake magnitude", min_value=1.0, max_value=7.0, value=2.5, step=0.1)
     lookback = st.slider("Lookback window (hours)", min_value=6, max_value=168, value=48, step=6)
 
-if st.button("Fetch Live Monitoring Data", type="primary") or "loaded_once" in st.session_state:
+if st.button("Fetch Live Monitoring Data", type="primary"):
     st.session_state["loaded_once"] = True
     weather_client = WeatherClient()
     quake_client = EarthquakeClient()
