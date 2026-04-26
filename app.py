@@ -5,7 +5,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from folium import Map, TileLayer
 from folium.plugins import HeatMap
-from streamlit_folium import st_folium
+
 
 from services.api_clients import EarthquakeClient, WeatherClient
 from utils.disaster_rules import (
@@ -16,8 +16,8 @@ from utils.disaster_rules import (
 )
 
 @st.cache_data(ttl=300)
-def get_weekly_events(_client):
-    return _client.weekly_events()
+def get_weekly_events():
+    return EarthquakeClient().weekly_events()
 
 @st.cache_data
 def create_heatmap(df):
@@ -30,11 +30,11 @@ def create_heatmap(df):
     ).tolist()
 
     HeatMap(heat_points, radius=12, blur=10).add_to(base_map)
-    return base_map
+    return base_map._repr_html_()
 
-st.set_page_config(page_title="IoT Emergency Alert System", page_icon="🚨", layout="wide")
+st.set_page_config(page_title="Emergency Alert System", page_icon="🚨", layout="wide")
 
-st.title(" IoT-Powered Emergency Alert and Disaster Monitoring System")
+st.title(" Emergency Alert and Disaster Monitoring System")
 st.caption("Software-only implementation using third-party weather and earthquake APIs.")
 
 city = st.text_input("Enter city to monitor", value="Gwalior")
@@ -45,27 +45,37 @@ with st.sidebar:
     min_mag = st.slider("Minimum earthquake magnitude", min_value=1.0, max_value=7.0, value=2.5, step=0.1)
     lookback = st.slider("Lookback window (hours)", min_value=6, max_value=168, value=48, step=6)
 
-# Button click
+# Button click    
 if st.button("Fetch Live Monitoring Data", type="primary"):
     st.session_state["run"] = True
-
+        
 # Run logic AFTER button and store results in session state to avoid re-fetching on every interaction
 if st.session_state.get("run") and not st.session_state.get("data_loaded"):
-
     weather_client = WeatherClient()
     quake_client = EarthquakeClient()
 
     try:
+        st.write("⏳ Resolving city...")         
         location = weather_client.resolve_city(city)
+
+        st.write("⏳ Fetching weather...")                                              
         current_weather = weather_client.current_weather(location.latitude, location.longitude)
-        quake_events = quake_client.nearby_events(
-            latitude=location.latitude,
-            longitude=location.longitude,
-            max_radius_km=radius,
-            min_magnitude=min_mag,
-            lookback_hours=lookback,
-        )
+
+        st.write("⏳ Fetching earthquakes...")     
+        quake_events = quake_client.nearby_events(latitude=location.latitude,
+        longitude=location.longitude,
+        max_radius_km=radius,
+        min_magnitude=min_mag,
+        lookback_hours=lookback,)
+
+        st.write("⏳ Fetching weekly events...")   
         weekly_events = get_weekly_events(quake_client)
+
+    except Exception as exc:
+        st.error(f"Failed: {exc}")
+        st.stop()
+    
+        weekly_events = get_weekly_events()
 
     except Exception as exc:
         st.error(f"Failed to fetch monitoring data: {exc}")
@@ -121,20 +131,20 @@ if st.session_state.get("data_loaded"):
     st.divider()
     st.subheader("🌍 Earthquake Heatmap (Global, Last 7 Days)")
     heatmap_df = pd.DataFrame(weekly_events)
-    if not heatmap_df.empty:
+
+    if heatmap_df.empty:
+        st.info("No weekly earthquake data available right now.")
+    else:
         heatmap_df = heatmap_df[["latitude", "longitude", "magnitude"]].dropna()
         heatmap_df["magnitude"] = pd.to_numeric(heatmap_df["magnitude"], errors="coerce").fillna(0.0)
         heatmap_df = heatmap_df[heatmap_df["magnitude"] > 0]
-        
-        heatmap_df = heatmap_df.sample(n=min(1000, len(heatmap_df)))
 
         if heatmap_df.empty:
-            st.info("No valid weekly earthquake coordinates available for heatmap rendering.")
+            st.info("No valid coordinates for heatmap.")
         else:
             heatmap_df = heatmap_df.sample(n=min(1000, len(heatmap_df)))
-            base_map = create_heatmap(heatmap_df)
-            st_folium(base_map, height=520, use_container_width=True)
-    else:
+            heatmap_html = create_heatmap(heatmap_df)
+            components.html(heatmap_html, height=600)
         st.info("No weekly earthquake data available right now.")
 
     st.divider()

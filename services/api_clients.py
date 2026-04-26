@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from math import radians, sin, cos, sqrt, atan2
 from typing import Any
 
 import requests
@@ -16,8 +17,6 @@ class Coordinates:
 
 
 class WeatherClient:
-    """Fetches weather-related data from Open-Meteo endpoints."""
-
     GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
     WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -29,11 +28,9 @@ class WeatherClient:
         )
         response.raise_for_status()
         payload = response.json()
-
         results = payload.get("results") or []
         if not results:
             raise ValueError(f"City '{city}' not found in geocoding provider.")
-
         result = results[0]
         return Coordinates(
             name=result["name"],
@@ -63,10 +60,32 @@ class WeatherClient:
 
 
 class EarthquakeClient:
-    """Fetches nearby earthquake events from USGS API."""
-
-    USGS_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
     USGS_WEEK_FEED = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.geojson"
+
+    def weekly_events(self) -> list[dict[str, Any]]:
+        response = requests.get(self.USGS_WEEK_FEED, timeout=20)
+        response.raise_for_status()
+        features = response.json().get("features") or []
+        events: list[dict[str, Any]] = []
+        for item in features:
+            props = item.get("properties") or {}
+            geometry = item.get("geometry") or {}
+            coordinates = geometry.get("coordinates") or [None, None, None]
+            ts_ms = props.get("time")
+            event_time = (
+                datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
+                if ts_ms else None
+            )
+            events.append({
+                "place": props.get("place"),
+                "magnitude": props.get("mag"),
+                "time_utc": event_time,
+                "url": props.get("url"),
+                "longitude": coordinates[0],
+                "latitude": coordinates[1],
+                "depth_km": coordinates[2],
+            })
+        return events
 
     def nearby_events(
         self,
@@ -76,77 +95,33 @@ class EarthquakeClient:
         min_magnitude: float = 2.5,
         lookback_hours: int = 48,
     ) -> list[dict[str, Any]]:
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(hours=lookback_hours)
+        all_events = self.weekly_events()
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
-        response = requests.get(
-            self.USGS_URL,
-            params={
-                "format": "geojson",
-                "starttime": start.isoformat(),
-                "endtime": end.isoformat(),
-                "latitude": latitude,
-                "longitude": longitude,
-                "maxradiuskm": max_radius_km,
-                "minmagnitude": min_magnitude,
-                "orderby": "time",
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
+        def haversine_km(lat1, lon1, lat2, lon2):
+            R = 6371
+            lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            a = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+            return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
-        features = response.json().get("features") or []
-        events: list[dict[str, Any]] = []
-        for item in features:
-            props = item.get("properties") or {}
-            geometry = item.get("geometry") or {}
-            coordinates = geometry.get("coordinates") or [None, None, None]
-            ts_ms = props.get("time")
-            event_time = (
-                datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
-                if ts_ms
-                else None
-            )
-            events.append(
-                {
-                    "place": props.get("place"),
-                    "magnitude": props.get("mag"),
-                    "time_utc": event_time,
-                    "url": props.get("url"),
-                    "longitude": coordinates[0],
-                    "latitude": coordinates[1],
-                    "depth_km": coordinates[2],
-                }
-            )
+        filtered = []
+        for ev in all_events:
+            mag = ev.get("magnitude")
+            if mag is None or mag < min_magnitude:
+                continue
+            ev_time_str = ev.get("time_utc")
+            if ev_time_str:
+                ev_time = datetime.fromisoformat(ev_time_str)
+                if ev_time < cutoff:
+                    continue
+            ev_lat = ev.get("latitude")
+            ev_lon = ev.get("longitude")
+            if ev_lat is None or ev_lon is None:
+                continue
+            if haversine_km(latitude, longitude, ev_lat, ev_lon) > max_radius_km:
+                continue
+            filtered.append(ev)
 
-        return events
-
-    def weekly_events(self) -> list[dict[str, Any]]:
-        """Returns all publicly listed earthquake events in the last 7 days."""
-        response = requests.get(self.USGS_WEEK_FEED, timeout=20)
-        response.raise_for_status()
-        features = response.json().get("features") or []
-
-        events: list[dict[str, Any]] = []
-        for item in features:
-            props = item.get("properties") or {}
-            geometry = item.get("geometry") or {}
-            coordinates = geometry.get("coordinates") or [None, None, None]
-            ts_ms = props.get("time")
-            event_time = (
-                datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
-                if ts_ms
-                else None
-            )
-            events.append(
-                {
-                    "place": props.get("place"),
-                    "magnitude": props.get("mag"),
-                    "time_utc": event_time,
-                    "url": props.get("url"),
-                    "longitude": coordinates[0],
-                    "latitude": coordinates[1],
-                    "depth_km": coordinates[2],
-                }
-            )
-        return events
+        return filtered
