@@ -1,8 +1,8 @@
-streamlit>=1.30
-pandas>=1.5
-numpy>=1.23
-scikit-learn>=1.2
-matplotlib>=3.7
-folium>=0.14
-streamlit-folium>=0.18
-requests>=2.31
+streamlit
+pandas
+folium
+streamlit-folium
+requests
+openmeteo-requests
+requests-cache
+retry-requests
