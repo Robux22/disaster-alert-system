@@ -19,6 +19,19 @@ from utils.disaster_rules import (
 def get_weekly_events(_client):
     return _client.weekly_events()
 
+@st.cache_data
+def create_heatmap(df):
+    base_map = Map(location=[20, 0], zoom_start=2, control_scale=True)
+    TileLayer("OpenStreetMap").add_to(base_map)
+
+    heat_points = df.apply(
+        lambda row: [float(row["latitude"]), float(row["longitude"]), float(row["magnitude"])],
+        axis=1,
+    ).tolist()
+
+    HeatMap(heat_points, radius=12, blur=10).add_to(base_map)
+    return base_map
+
 st.set_page_config(page_title="IoT Emergency Alert System", page_icon="🚨", layout="wide")
 
 st.title(" IoT-Powered Emergency Alert and Disaster Monitoring System")
@@ -32,8 +45,13 @@ with st.sidebar:
     min_mag = st.slider("Minimum earthquake magnitude", min_value=1.0, max_value=7.0, value=2.5, step=0.1)
     lookback = st.slider("Lookback window (hours)", min_value=6, max_value=168, value=48, step=6)
 
+# Button click
 if st.button("Fetch Live Monitoring Data", type="primary"):
-    st.session_state["loaded_once"] = True
+    st.session_state["run"] = True
+
+# Run logic AFTER button and store results in session state to avoid re-fetching on every interaction
+if st.session_state.get("run") and not st.session_state.get("data_loaded"):
+
     weather_client = WeatherClient()
     quake_client = EarthquakeClient()
 
@@ -48,15 +66,34 @@ if st.button("Fetch Live Monitoring Data", type="primary"):
             lookback_hours=lookback,
         )
         weekly_events = get_weekly_events(quake_client)
+
     except Exception as exc:
         st.error(f"Failed to fetch monitoring data: {exc}")
         st.stop()
+
+    # Store fetched data in session state
+    st.session_state["data"] = {
+        "location": location,
+        "weather": current_weather,
+        "quakes": quake_events,
+        "weekly": weekly_events
+    }
+    st.session_state["data_loaded"] = True
+
+if st.session_state.get("data_loaded"):
+    data = st.session_state["data"]
+
+    location = data["location"]
+    current_weather = data["weather"]
+    quake_events = data["quakes"]
+    weekly_events = data["weekly"]        
 
     weather_level, weather_reason = classify_weather_risk(current_weather)
     quake_level, quake_reason = classify_earthquake_risk(quake_events)
     overall_level = combine_risk_levels(weather_level, quake_level)
 
     st.subheader(f"📍 Monitoring: {location.name}, {location.country}")
+
     c1, c2, c3 = st.columns(3)
     c1.metric("Temperature (°C)", current_weather.get("temperature_2m", "N/A"))
     c2.metric("Humidity (%)", current_weather.get("relative_humidity_2m", "N/A"))
@@ -94,23 +131,9 @@ if st.button("Fetch Live Monitoring Data", type="primary"):
         if heatmap_df.empty:
             st.info("No valid weekly earthquake coordinates available for heatmap rendering.")
         else:
-            base_map = Map(location=[20, 0], zoom_start=2, control_scale=True)
-            TileLayer("OpenStreetMap").add_to(base_map)
-
-            heat_points = heatmap_df.apply(
-                lambda row: [float(row["latitude"]), float(row["longitude"]), float(row["magnitude"])],
-                axis=1,
-            ).tolist()
-
-            HeatMap(
-                heat_points,
-                radius=12,
-                blur=10,
-                min_opacity=0.3,
-                max_zoom=6,
-            ).add_to(base_map)
-
-            st_folium(base_map, width=None, height=520, use_container_width=True)
+            heatmap_df = heatmap_df.sample(n=min(1000, len(heatmap_df)))
+            base_map = create_heatmap(heatmap_df)
+            st_folium(base_map, height=520, use_container_width=True)
     else:
         st.info("No weekly earthquake data available right now.")
 
